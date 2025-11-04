@@ -3,7 +3,7 @@ FastAPI REST API for ATS Resume Scoring and Optimization
 """
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Body, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ValidationError
@@ -13,6 +13,20 @@ import tempfile
 from ats_analyzer import ATSAnalyzer
 from resume_optimizer import ResumeOptimizer
 import json
+from datetime import datetime
+from io import BytesIO
+
+# PDF generation
+try:
+    from reportlab.lib.pagesizes import letter, A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
 
 
 class AnalyzeRequest(BaseModel):
@@ -571,7 +585,9 @@ async def auto_optimize_resume(request: AnalyzeRequest):
             "optimized_analysis": optimized_analysis,
             "optimized_resume": optimized_resume,
             "changes_made": optimizer.changes_made,
-            "optimized_session_id": request.session_id + '_optimized'
+            "optimized_session_id": request.session_id + '_optimized',
+            "download_url": f"/api/download-optimized/{request.session_id + '_optimized'}",
+            "view_url": f"/api/view-optimized/{request.session_id + '_optimized'}"
         })
     
     except HTTPException:
@@ -628,6 +644,13 @@ async def auto_optimize_with_file(
         
         optimized_resume, optimized_analysis = optimizer.optimize_resume(original_analysis)
         
+        # Store optimized resume in temporary session for download
+        temp_session_id = f"temp_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        resume_storage[temp_session_id] = {
+            'resume_text': optimized_resume,
+            'filename': file.filename.replace('.pdf', '').replace('.txt', '') + '_optimized.pdf'
+        }
+        
         return JSONResponse({
             "success": True,
             "original_score": original_analysis['overall_score'],
@@ -636,13 +659,245 @@ async def auto_optimize_with_file(
             "original_analysis": original_analysis,
             "optimized_analysis": optimized_analysis,
             "optimized_resume": optimized_resume,
-            "changes_made": optimizer.changes_made
+            "changes_made": optimizer.changes_made,
+            "download_url": f"/api/download-optimized/{temp_session_id}",
+            "view_url": f"/api/view-optimized/{temp_session_id}",
+            "temp_session_id": temp_session_id
         })
     
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Optimization error: {str(e)}")
+
+
+@app.get("/api/view-optimized/{session_id}")
+async def view_optimized_resume(session_id: str):
+    """
+    View the optimized resume as plain text.
+    """
+    try:
+        if session_id not in resume_storage:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Session ID '{session_id}' not found. The optimized resume may have expired."
+            )
+        
+        optimized_resume = resume_storage[session_id]['resume_text']
+        filename = resume_storage[session_id].get('filename', 'optimized_resume.txt')
+        
+        return PlainTextResponse(
+            content=optimized_resume,
+            media_type="text/plain",
+            headers={
+                "Content-Disposition": f'inline; filename="{filename}"',
+                "X-Filename": filename
+            }
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error viewing resume: {str(e)}")
+
+
+def generate_pdf_from_text(text: str) -> BytesIO:
+    """Generate PDF from text resume"""
+    if not PDF_AVAILABLE:
+        raise ImportError("reportlab is not installed. Install with: pip install reportlab")
+    
+    buffer = BytesIO()
+    
+    try:
+        # Create PDF document
+        doc = SimpleDocTemplate(buffer, pagesize=letter,
+                               rightMargin=0.75*inch, leftMargin=0.75*inch,
+                               topMargin=0.75*inch, bottomMargin=0.75*inch)
+        
+        # Container for the 'Flowable' objects
+        elements = []
+        
+        # Define styles
+        styles = getSampleStyleSheet()
+        
+        # Custom styles
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=16,
+            textColor='#000000',
+            spaceAfter=12,
+            alignment=1,  # Center
+            fontName='Helvetica-Bold'
+        )
+        
+        heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=styles['Heading2'],
+            fontSize=14,
+            textColor='#000000',
+            spaceAfter=6,
+            spaceBefore=12,
+            fontName='Helvetica-Bold'
+        )
+        
+        normal_style = ParagraphStyle(
+            'CustomNormal',
+            parent=styles['Normal'],
+            fontSize=11,
+            textColor='#000000',
+            spaceAfter=6,
+            leading=14,
+            fontName='Helvetica'
+        )
+        
+        # Parse text and create PDF elements
+        lines = text.split('\n')
+        first_line = True
+        
+        for line in lines:
+            line_stripped = line.strip()
+            
+            if not line_stripped:
+                elements.append(Spacer(1, 6))
+                continue
+            
+            # Check if line is a section heading
+            section_headings = ['PROFESSIONAL SUMMARY', 'WORK EXPERIENCE', 'SKILLS', 
+                               'EDUCATION', 'CERTIFICATIONS', 'PROJECTS']
+            is_heading = False
+            for heading in section_headings:
+                if line_stripped.upper() == heading or line_stripped.upper().startswith(heading):
+                    elements.append(Spacer(1, 12))
+                    para = Paragraph(f"<b>{heading}</b>", heading_style)
+                    elements.append(para)
+                    elements.append(Spacer(1, 6))
+                    is_heading = True
+                    first_line = False
+                    break
+            
+            if is_heading:
+                continue
+            
+            # Check if line is name/header (first non-empty line, usually centered)
+            if first_line and len(line_stripped.split()) <= 6:
+                para = Paragraph(f"<b>{line_stripped}</b>", title_style)
+                elements.append(para)
+                first_line = False
+            # Check if line is a bullet point
+            elif line_stripped.startswith('•') or line_stripped.startswith('-') or line_stripped.startswith('*'):
+                # Remove bullet and format
+                content = line_stripped.lstrip('•-*').strip()
+                # Escape HTML
+                content = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                para = Paragraph(f"• {content}", normal_style)
+                elements.append(para)
+                first_line = False
+            else:
+                # Regular paragraph
+                # Escape HTML characters for safety
+                content = line_stripped.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                para = Paragraph(content, normal_style)
+                elements.append(para)
+                first_line = False
+        
+        # Build PDF
+        doc.build(elements)
+        buffer.seek(0)
+        return buffer
+    
+    except Exception as e:
+        # If PDF generation fails, raise the error
+        raise Exception(f"PDF generation failed: {str(e)}")
+
+
+@app.get("/api/download-optimized/{session_id}")
+async def download_optimized_resume(session_id: str):
+    """
+    Download the optimized resume as a PDF file.
+    """
+    try:
+        if session_id not in resume_storage:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Session ID '{session_id}' not found. The optimized resume may have expired."
+            )
+        
+        optimized_resume = resume_storage[session_id]['resume_text']
+        filename = resume_storage[session_id].get('filename', 'optimized_resume')
+        
+        # Remove extensions and ensure .pdf
+        filename = filename.replace('.txt', '').replace('.pdf', '')
+        if not filename.endswith('.pdf'):
+            filename = filename + '.pdf'
+        
+        # Check if PDF generation is available
+        if not PDF_AVAILABLE:
+            raise HTTPException(
+                status_code=500,
+                detail="PDF generation requires reportlab library. Please install it with: pip install reportlab>=4.0.0"
+            )
+        
+        # Generate PDF - this will raise an exception if it fails
+        try:
+            pdf_buffer = generate_pdf_from_text(optimized_resume)
+            pdf_content = pdf_buffer.read()
+            
+            # Verify PDF was generated (check PDF magic bytes)
+            if not pdf_content.startswith(b'%PDF'):
+                raise Exception("Generated file is not a valid PDF")
+            
+            return Response(
+                content=pdf_content,
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{filename}"',
+                    "Content-Type": "application/pdf",
+                    "Content-Length": str(len(pdf_content))
+                }
+            )
+        except Exception as pdf_error:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to generate PDF: {str(pdf_error)}. Please ensure reportlab is installed: pip install reportlab>=4.0.0"
+            )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error downloading resume: {str(e)}")
+
+
+@app.get("/api/get-optimized-resume/{session_id}")
+async def get_optimized_resume_json(session_id: str):
+    """
+    Get optimized resume as JSON response with metadata.
+    """
+    try:
+        if session_id not in resume_storage:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Session ID '{session_id}' not found. The optimized resume may have expired."
+            )
+        
+        optimized_resume = resume_storage[session_id]['resume_text']
+        filename = resume_storage[session_id].get('filename', 'optimized_resume.txt')
+        
+        return JSONResponse({
+            "success": True,
+            "session_id": session_id,
+            "filename": filename,
+            "resume_text": optimized_resume,
+            "download_url": f"/api/download-optimized/{session_id}",
+            "view_url": f"/api/view-optimized/{session_id}",
+            "character_count": len(optimized_resume),
+            "line_count": len(optimized_resume.split('\n'))
+        })
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving resume: {str(e)}")
 
 
 if __name__ == "__main__":

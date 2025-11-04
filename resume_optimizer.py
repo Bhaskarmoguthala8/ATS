@@ -221,32 +221,44 @@ Return ONLY the enhanced skills section, nothing else. Keep the same format styl
         # Filter important keywords for summary
         important_keywords = [kw for kw in missing_keywords[:5]]
         
-        prompt = f"""Enhance this resume summary by naturally incorporating missing keywords. Keep it professional and concise.
+        prompt = f"""Enhance this resume summary by naturally incorporating missing keywords. PRESERVE ALL ORIGINAL CONTENT.
+
+CRITICAL RULES:
+1. NEVER add years of experience that aren't in the original
+2. NEVER add skills or experience that aren't supported by the resume
+3. ONLY add keywords that naturally fit with existing content
+4. Keep ALL original information
 
 Current Summary:
 {summary_content}
 
-Keywords to Incorporate: {', '.join(important_keywords)}
+Keywords to Incorporate (only if they fit): {', '.join(important_keywords)}
 
 Job Description Context:
 {self.job_description[:300]}
 
 Requirements:
-1. Keep the original meaning and tone
-2. Naturally incorporate keywords
+1. Keep the original meaning and tone EXACTLY
+2. Naturally incorporate keywords ONLY if they fit
 3. Maintain professional writing style
-4. Keep it concise (2-3 sentences)
-5. Make it more impactful
+4. Keep it concise (2-3 sentences like original)
+5. DO NOT add claims about experience years or skills not in original
 
 Return ONLY the enhanced summary, nothing else."""
         
         enhanced = self._call_llm(
             prompt,
-            system_prompt="You are an expert resume writer. Enhance summaries naturally with keywords.",
+            system_prompt="You are an ethical resume writer. NEVER fabricate information. Only enhance what exists. Do not add years of experience, skills, or achievements that aren't in the original resume.",
             max_tokens=150
         )
         
         if enhanced:
+            # Remove any section headings that might have been added
+            enhanced = enhanced.strip()
+            if enhanced.upper().startswith('PROFESSIONAL SUMMARY'):
+                enhanced = enhanced[len('PROFESSIONAL SUMMARY'):].strip()
+            if enhanced.upper().startswith('SUMMARY'):
+                enhanced = enhanced[len('SUMMARY'):].strip()
             self.changes_made.append("Enhanced Summary with missing keywords")
             return enhanced
         
@@ -261,40 +273,48 @@ Return ONLY the enhanced summary, nothing else."""
         experience_keywords = [kw for kw in missing_keywords if any(term in kw.lower() for term in 
             ['python', 'react', 'aws', 'docker', 'api', 'microservices', 'ci/cd', 'agile', 'scrum', 'framework'])]
         
-        prompt = f"""Enhance this Work Experience section by:
-1. Improving weak bullet points with strong action verbs and metrics
-2. Adding missing keywords naturally
-3. Making achievements more quantifiable
+        prompt = f"""Enhance this Work Experience section by improving existing bullets and adding keywords ONLY to what already exists.
+
+CRITICAL RULES - DO NOT VIOLATE:
+1. NEVER add years of experience that aren't in the original (e.g., don't add "7 years" if not mentioned)
+2. NEVER add experience you didn't have (e.g., don't add "leading teams" if you were an intern)
+3. NEVER fabricate achievements or metrics not in the original
+4. ONLY enhance existing bullets - don't create new ones
+5. Keep ALL job titles, company names, and dates EXACTLY as they are
+6. Only add keywords that make sense with the existing content
 
 Current Experience Section:
 {experience_content}
 
-Missing Keywords to Add: {', '.join(experience_keywords[:8])}
-
-Weak Bullets to Improve:
-{chr(10).join([f"- {r.get('original', '')}" for r in bullet_rewrites[:3]])}
+Missing Keywords to Add (only if they fit naturally): {', '.join(experience_keywords[:8])}
 
 Job Description Context:
 {self.job_description[:400]}
 
 Requirements:
-1. Keep ALL existing experience entries
-2. Improve bullet points with strong verbs (Led, Developed, Implemented, etc.)
-3. Add quantifiable metrics where appropriate (%, numbers, $)
-4. Naturally incorporate missing keywords
+1. Keep ALL existing experience entries exactly as they are
+2. Improve existing bullet points with stronger action verbs ONLY
+3. Add keywords naturally ONLY if they fit the existing work
+4. If original has no metrics, you MAY suggest adding relevant metrics but keep them realistic
 5. Maintain professional tone
-6. Keep job titles and dates unchanged
+6. Keep job titles, company names, and dates UNCHANGED
 7. Make bullets achievement-focused, not task-focused
+8. DO NOT add experience that wasn't there (e.g., if original says "Intern", don't add "leading teams")
 
-Return ONLY the enhanced experience section with all improvements, nothing else."""
+Return ONLY the enhanced experience section, nothing else."""
         
         enhanced = self._call_llm(
             prompt,
-            system_prompt="You are an expert resume writer. Enhance work experience sections with keywords and strong bullets.",
+            system_prompt="You are an ethical resume writer. NEVER fabricate information. Only enhance existing bullets. Do not add years of experience, leadership roles, or achievements that aren't in the original. Keep job titles and dates unchanged.",
             max_tokens=800
         )
         
         if enhanced:
+            # Remove any section headings that might have been added
+            enhanced = enhanced.strip()
+            for heading in ['WORK EXPERIENCE', 'EXPERIENCE', 'WORK HISTORY']:
+                if enhanced.upper().startswith(heading):
+                    enhanced = enhanced[len(heading):].strip()
             self.changes_made.append(f"Enhanced Work Experience: Improved bullets and added keywords")
             return enhanced
         
@@ -336,10 +356,209 @@ Return ONLY the enhanced projects section, nothing else."""
         )
         
         if enhanced:
+            # Remove any section headings that might have been added
+            enhanced = enhanced.strip()
+            if enhanced.upper().startswith('PROJECTS'):
+                enhanced = enhanced[len('PROJECTS'):].strip()
             self.changes_made.append("Enhanced Projects section with keywords")
             return enhanced
         
         return projects_content
+    
+    def fix_format_issues(self, resume_text: str, format_issues: List[Dict]) -> str:
+        """Fix format issues to make resume ATS-friendly"""
+        if not format_issues:
+            return resume_text
+        
+        fixed_text = resume_text
+        
+        # Fix non-standard headings
+        for issue in format_issues:
+            issue_text = issue.get('issue', '').lower()
+            suggestion = issue.get('suggestion', '')
+            
+            # Fix non-standard section headings
+            if 'non-standard section headings' in issue_text or 'heading' in issue_text:
+                fixed_text = self._standardize_headings(fixed_text)
+            
+            # Fix tables
+            if 'table' in issue_text:
+                fixed_text = self._convert_tables_to_text(fixed_text)
+            
+            # Fix all-caps text
+            if 'all-caps' in issue_text or 'all caps' in issue_text:
+                fixed_text = self._fix_all_caps(fixed_text)
+            
+            # Fix multi-column layouts
+            if 'multi-column' in issue_text or 'column' in issue_text:
+                fixed_text = self._fix_multicolumn_layout(fixed_text)
+        
+        # General cleanup
+        fixed_text = self._cleanup_formatting(fixed_text)
+        
+        if fixed_text != resume_text:
+            self.changes_made.append("Fixed formatting issues: Standardized headings and layout")
+        
+        return fixed_text
+    
+    def _standardize_headings(self, text: str) -> str:
+        """Convert non-standard headings to standard ATS-friendly headings"""
+        lines = text.split('\n')
+        standardized_lines = []
+        
+        # Mapping of common variations to standard headings
+        heading_mappings = {
+            'professional summary': 'PROFESSIONAL SUMMARY',
+            'summary': 'PROFESSIONAL SUMMARY',
+            'profile': 'PROFESSIONAL SUMMARY',
+            'objective': 'PROFESSIONAL SUMMARY',
+            'work experience': 'WORK EXPERIENCE',
+            'experience': 'WORK EXPERIENCE',
+            'employment': 'WORK EXPERIENCE',
+            'professional experience': 'WORK EXPERIENCE',
+            'work history': 'WORK EXPERIENCE',
+            'skills': 'SKILLS',
+            'technical skills': 'SKILLS',
+            'core competencies': 'SKILLS',
+            'key skills': 'SKILLS',
+            'competencies': 'SKILLS',
+            'education': 'EDUCATION',
+            'educational background': 'EDUCATION',
+            'academic background': 'EDUCATION',
+            'certifications': 'CERTIFICATIONS',
+            'certificates': 'CERTIFICATIONS',
+            'credentials': 'CERTIFICATIONS',
+            'projects': 'PROJECTS',
+            'personal projects': 'PROJECTS',
+            'relevant projects': 'PROJECTS'
+        }
+        
+        for line in lines:
+            line_stripped = line.strip()
+            # Check if line is a heading (alone on line, possibly with some formatting)
+            if line_stripped and not line_stripped.startswith('-') and not line_stripped.startswith('•'):
+                line_lower = line_stripped.lower()
+                # Check if it matches any heading pattern
+                for pattern, standard in heading_mappings.items():
+                    if line_lower == pattern or line_lower.startswith(pattern + ':'):
+                        standardized_lines.append(standard)
+                        break
+                else:
+                    standardized_lines.append(line)
+            else:
+                standardized_lines.append(line)
+        
+        return '\n'.join(standardized_lines)
+    
+    def _convert_tables_to_text(self, text: str) -> str:
+        """Convert table-like structures to plain text"""
+        lines = text.split('\n')
+        converted_lines = []
+        
+        for line in lines:
+            # Detect table patterns (multiple spaces, tabs, or pipes)
+            if '|' in line or (line.count('  ') >= 3 and len(line.strip()) > 30):
+                # Convert table row to bullet points or plain text
+                parts = re.split(r'\||\s{2,}|\t+', line)
+                parts = [p.strip() for p in parts if p.strip()]
+                if len(parts) >= 2:
+                    # Convert to bullet format
+                    converted_lines.append('• ' + ' | '.join(parts))
+                else:
+                    converted_lines.append(line)
+            else:
+                converted_lines.append(line)
+        
+        return '\n'.join(converted_lines)
+    
+    def _fix_all_caps(self, text: str) -> str:
+        """Fix excessive all-caps text (preserve headings but fix body text)"""
+        lines = text.split('\n')
+        fixed_lines = []
+        
+        standard_headings = ['PROFESSIONAL SUMMARY', 'WORK EXPERIENCE', 'SKILLS', 'EDUCATION', 
+                           'CERTIFICATIONS', 'PROJECTS']
+        
+        for line in lines:
+            line_stripped = line.strip()
+            # Skip if it's a standard heading
+            if line_stripped in standard_headings:
+                fixed_lines.append(line_stripped)
+            # Check if line is all caps (but not empty or single word)
+            elif line_stripped and line_stripped.isupper() and len(line_stripped.split()) > 2:
+                # Convert to title case
+                fixed_lines.append(line_stripped.title())
+            else:
+                fixed_lines.append(line)
+        
+        return '\n'.join(fixed_lines)
+    
+    def _fix_multicolumn_layout(self, text: str) -> str:
+        """Convert multi-column layouts to single column"""
+        lines = text.split('\n')
+        fixed_lines = []
+        
+        for line in lines:
+            # Detect multi-column patterns (multiple tab-separated or spaced sections)
+            if '\t' in line and line.count('\t') >= 2:
+                # Split by tabs and create separate lines
+                parts = [p.strip() for p in line.split('\t') if p.strip()]
+                fixed_lines.extend(parts)
+            elif re.search(r'\s{4,}', line) and len(line.strip()) > 50:
+                # Multiple spaces might indicate columns
+                parts = re.split(r'\s{4,}', line)
+                parts = [p.strip() for p in parts if p.strip()]
+                if len(parts) >= 2:
+                    fixed_lines.extend(parts)
+                else:
+                    fixed_lines.append(line)
+            else:
+                fixed_lines.append(line)
+        
+        return '\n'.join(fixed_lines)
+    
+    def _cleanup_formatting(self, text: str) -> str:
+        """General formatting cleanup"""
+        # Remove excessive blank lines (more than 2 consecutive)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        
+        # Remove leading/trailing whitespace from lines
+        lines = [line.rstrip() for line in text.split('\n')]
+        text = '\n'.join(lines)
+        
+        # Ensure consistent bullet points
+        text = re.sub(r'^[\u2022\u2023\u25E6\u2043\u2219]\s*', '• ', text, flags=re.MULTILINE)
+        text = re.sub(r'^[-]\s+', '• ', text, flags=re.MULTILINE)
+        text = re.sub(r'^[*]\s+', '• ', text, flags=re.MULTILINE)
+        
+        # Remove special characters that might confuse ATS (but keep common punctuation)
+        # Keep: letters, numbers, spaces, common punctuation, bullet points
+        text = re.sub(r'[^\w\s\.,;:!?()\-\'•\n@#]', '', text)
+        
+        # Ensure proper spacing around headings (standard section headings)
+        standard_headings = ['PROFESSIONAL SUMMARY', 'WORK EXPERIENCE', 'SKILLS', 'EDUCATION', 
+                           'CERTIFICATIONS', 'PROJECTS']
+        for heading in standard_headings:
+            # Ensure heading has blank line before and after
+            text = re.sub(r'\n' + re.escape(heading) + r'\n', f'\n\n{heading}\n\n', text, flags=re.IGNORECASE)
+        
+        # Remove tabs (replace with spaces)
+        text = text.replace('\t', ' ')
+        
+        # Normalize multiple spaces to single space (except at start of lines)
+        lines = text.split('\n')
+        normalized_lines = []
+        for line in lines:
+            # Preserve leading spaces but normalize internal spaces
+            leading_spaces = len(line) - len(line.lstrip())
+            normalized_line = ' ' * leading_spaces + ' '.join(line.strip().split())
+            normalized_lines.append(normalized_line)
+        text = '\n'.join(normalized_lines)
+        
+        # Final cleanup: remove excessive blank lines again
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        
+        return text.strip()
     
     def optimize_resume(self, analysis_result: Dict) -> Tuple[str, Dict]:
         """Optimize resume to reach 100% ATS score with iterative improvements"""
@@ -348,13 +567,17 @@ Return ONLY the enhanced projects section, nothing else."""
         max_iterations = 3  # Limit iterations to avoid infinite loops
         
         for iteration in range(max_iterations):
+            # Fix format issues first
+            format_issues = current_analysis.get('format_issues', [])
+            if format_issues:
+                current_resume = self.fix_format_issues(current_resume, format_issues)
+            
             # Parse resume sections from current resume
             sections = self.parse_resume_sections(current_resume)
             
             # Get missing keywords
             missing_keywords = [kw['keyword'] for kw in current_analysis.get('missing_keywords', [])]
             bullet_rewrites = current_analysis.get('bullet_rewrites', [])
-            format_issues = current_analysis.get('format_issues', [])
             
             # If score is already 100 or very close, stop
             if current_analysis.get('overall_score', 0) >= 95:
@@ -367,9 +590,24 @@ Return ONLY the enhanced projects section, nothing else."""
             # Build optimized resume
             optimized_lines = []
             
-            # Add header (preserve name and contact info)
-            header_lines = current_resume.split('\n')[:5]
-            optimized_lines.extend([line for line in header_lines if line.strip()])
+            # Extract header properly (name and contact info)
+            lines = current_resume.split('\n')
+            header_end = 0
+            for i, line in enumerate(lines):
+                line_stripped = line.strip().upper()
+                # Stop at first section heading
+                if any(heading in line_stripped for heading in ['SUMMARY', 'EXPERIENCE', 'SKILLS', 'EDUCATION', 'PROJECTS']):
+                    header_end = i
+                    break
+                if i >= 10:  # Safety limit
+                    header_end = i
+                    break
+            
+            # Add header lines (preserve formatting)
+            header_lines = lines[:header_end] if header_end > 0 else lines[:5]
+            for line in header_lines:
+                if line.strip():  # Keep non-empty lines
+                    optimized_lines.append(line)
             optimized_lines.append('')
             
             # Enhance Summary
@@ -459,6 +697,9 @@ Return ONLY the summary, nothing else."""
             
             current_resume = '\n'.join(optimized_lines)
             
+            # Apply final format cleanup
+            current_resume = self._cleanup_formatting(current_resume)
+            
             # Re-analyze to get new score
             analyzer = ATSAnalyzer(
                 resume_text=current_resume,
@@ -471,6 +712,20 @@ Return ONLY the summary, nothing else."""
             
             # Update sections for next iteration
             self.original_resume = current_resume
+        
+        # Final format check and fix
+        final_format_issues = current_analysis.get('format_issues', [])
+        if final_format_issues:
+            current_resume = self.fix_format_issues(current_resume, final_format_issues)
+            # Re-analyze one more time after format fixes
+            analyzer = ATSAnalyzer(
+                resume_text=current_resume,
+                job_description=self.job_description,
+                use_llm=True,
+                llm_api_key=self.llm_api_key,
+                llm_provider=self.llm_provider
+            )
+            current_analysis = analyzer.analyze()
         
         return current_resume, current_analysis
 

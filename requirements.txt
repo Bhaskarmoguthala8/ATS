@@ -8,15 +8,19 @@
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 python-multipart>=0.0.6  # Required for file uploads
+pydantic>=2.0.0  # For data validation (required by FastAPI)
 
 # PDF processing (required for PDF resume uploads)
 pdfplumber>=0.10.0  # For PDF resume parsing (recommended)
 PyPDF2>=3.0.0  # Alternative PDF parser (fallback)
 
+# PDF generation for downloading optimized resumes
+reportlab>=4.0.0  # For PDF generation (required for PDF download feature)
+
 # Optional: For enhanced LLM-powered recommendations (like Jobscan, ResumeWorded)
 # Install one or more:
 openai>=1.0.0  # Required for OpenAI GPT models OR Perplexity Sonar Pro
-# anthropic>=0.18.0  # For Anthropic Claude models
+# anthropic>=0.18.0  # For Anthropic Claude models (optional)
 # python-dotenv>=1.0.0  # For loading .env files (optional but recommended)
 
 # Usage with LLM:
