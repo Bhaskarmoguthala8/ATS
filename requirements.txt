@@ -1,0 +1,29 @@
+# ATS Resume Scoring and Optimization Assistant
+# Python 3.8+
+
+# Core: No external dependencies required - uses only Python standard library
+# Works out-of-the-box with rule-based analysis
+
+# API Server (for REST API)
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6  # Required for file uploads
+
+# PDF processing (required for PDF resume uploads)
+pdfplumber>=0.10.0  # For PDF resume parsing (recommended)
+PyPDF2>=3.0.0  # Alternative PDF parser (fallback)
+
+# Optional: For enhanced LLM-powered recommendations (like Jobscan, ResumeWorded)
+# Install one or more:
+openai>=1.0.0  # Required for OpenAI GPT models OR Perplexity Sonar Pro
+# anthropic>=0.18.0  # For Anthropic Claude models
+# python-dotenv>=1.0.0  # For loading .env files (optional but recommended)
+
+# Usage with LLM:
+# Set environment variable: USE_LLM=true
+# Set provider (optional, defaults to openai): LLM_PROVIDER=perplexity|openai|anthropic
+# Set API key: 
+#   PERPLEXITY_API_KEY=your_key (for Perplexity Sonar Pro)
+#   OPENAI_API_KEY=your_key (for OpenAI)
+#   ANTHROPIC_API_KEY=your_key (for Anthropic)
+# python main.py input.txt

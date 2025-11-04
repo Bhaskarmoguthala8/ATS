@@ -1,0 +1,60 @@
+RESUME TEXT:
+<<<RESUME>>>
+John Doe
+Software Engineer
+Email: john@example.com | Phone: (555) 123-4567
+
+SUMMARY
+Experienced software developer with 5 years of experience in web development and software engineering.
+
+WORK EXPERIENCE
+
+Software Developer | ABC Corp | 2020-2023
+- Worked on web applications using Python and JavaScript
+- Helped with team projects
+- Used various technologies
+
+Junior Developer | XYZ Inc | 2018-2020
+- Developed features for mobile applications
+- Participated in code reviews
+
+SKILLS
+Python, JavaScript, HTML, CSS, SQL
+
+EDUCATION
+Bachelor of Science in Computer Science | XYZ University | 2018
+<<<END RESUME>>>
+
+JOB DESCRIPTION TEXT:
+<<<JOB_DESCRIPTION>>>
+Senior Software Engineer
+
+We are looking for a Senior Software Engineer with the following requirements:
+
+Required Skills:
+- Python (5+ years experience)
+- JavaScript/TypeScript
+- React
+- AWS (Amazon Web Services)
+- Docker
+- REST API development
+- Experience with microservices architecture
+- Git version control
+
+Preferred Skills:
+- Kubernetes
+- CI/CD pipelines (Jenkins, GitHub Actions)
+- Agile/Scrum experience
+- Test-driven development (TDD)
+
+Education: Bachelor's degree in Computer Science or related field required.
+
+Certifications: AWS Certified Solutions Architect preferred.
+
+Responsibilities:
+- Design and develop scalable web applications
+- Lead technical projects and mentor junior developers
+- Implement CI/CD pipelines
+- Work with cloud infrastructure (AWS)
+- Collaborate in agile development environment
+<<<END JOB_DESCRIPTION>>>
