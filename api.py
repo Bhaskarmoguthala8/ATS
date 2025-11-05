@@ -12,6 +12,7 @@ import os
 import tempfile
 from ats_analyzer import ATSAnalyzer
 from resume_optimizer import ResumeOptimizer
+from resume_extractor import ResumeExtractor, ATSResumeTemplate
 import json
 from datetime import datetime
 from io import BytesIO
@@ -40,6 +41,12 @@ class AnalyzeDirectRequest(BaseModel):
     """Request model for analyze-direct endpoint"""
     resume_text: str
     job_description: str
+    use_llm: Optional[bool] = False
+
+
+class ExtractResumeRequest(BaseModel):
+    """Request model for extract-resume endpoint"""
+    resume_text: str
     use_llm: Optional[bool] = False
 
 # Try to load .env file if python-dotenv is available
@@ -898,6 +905,208 @@ async def get_optimized_resume_json(session_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving resume: {str(e)}")
+
+
+@app.post("/api/extract-resume")
+async def extract_resume_data(request: ExtractResumeRequest):
+    """
+    Extract structured data from resume text.
+    
+    This endpoint extracts data from your resume and formats it into an ATS-friendly template.
+    Better than trying to preserve formatting from PDFs - extracts the data and applies a clean template.
+    
+    Accepts JSON body with:
+    - resume_text: Resume text content
+    - use_llm: Whether to use LLM for better extraction (optional, default: false)
+    
+    Returns:
+    - extracted_data: Structured JSON data extracted from resume
+    - formatted_resume: ATS-friendly formatted resume text using the template
+    """
+    try:
+        if not request.resume_text or not request.resume_text.strip():
+            raise HTTPException(status_code=400, detail="resume_text is required and cannot be empty")
+        
+        # Check LLM availability if requested
+        use_llm_flag = request.use_llm or os.getenv('USE_LLM', 'false').lower() == 'true'
+        llm_provider = os.getenv('LLM_PROVIDER', 'perplexity').lower()
+        llm_api_key = os.getenv('PERPLEXITY_API_KEY') or os.getenv('OPENAI_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
+        
+        if use_llm_flag and not llm_api_key:
+            use_llm_flag = False  # Fallback to rule-based if LLM requested but no API key
+        
+        # Extract structured data
+        extractor = ResumeExtractor(
+            resume_text=request.resume_text,
+            use_llm=use_llm_flag,
+            llm_api_key=llm_api_key,
+            llm_provider=llm_provider
+        )
+        
+        resume_data = extractor.extract()
+        
+        # Format using ATS-friendly template
+        formatted_resume = ATSResumeTemplate.format_resume(resume_data)
+        
+        # Convert to JSON-serializable format
+        extracted_dict = {
+            "personal_info": {
+                "full_name": resume_data.personal_info.full_name,
+                "email": resume_data.personal_info.email,
+                "phone": resume_data.personal_info.phone,
+                "location": resume_data.personal_info.location,
+                "linkedin": resume_data.personal_info.linkedin,
+                "portfolio": resume_data.personal_info.portfolio
+            },
+            "summary": resume_data.summary,
+            "work_experience": [
+                {
+                    "job_title": exp.job_title,
+                    "company": exp.company,
+                    "location": exp.location,
+                    "start_date": exp.start_date,
+                    "end_date": exp.end_date,
+                    "is_current": exp.is_current,
+                    "bullets": exp.bullets
+                }
+                for exp in resume_data.work_experience
+            ],
+            "skills": resume_data.skills,
+            "education": [
+                {
+                    "degree": edu.degree,
+                    "field": edu.field,
+                    "institution": edu.institution,
+                    "location": edu.location,
+                    "graduation_date": edu.graduation_date,
+                    "gpa": edu.gpa
+                }
+                for edu in resume_data.education
+            ],
+            "certifications": resume_data.certifications,
+            "projects": resume_data.projects
+        }
+        
+        return JSONResponse({
+            "success": True,
+            "extraction_method": "llm" if (use_llm_flag and extractor._llm_client) else "rule-based",
+            "extracted_data": extracted_dict,
+            "formatted_resume": formatted_resume,
+            "message": "Resume data extracted and formatted using ATS-friendly template"
+        })
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Extraction error: {str(e)}")
+
+
+@app.post("/api/extract-resume-with-file")
+async def extract_resume_with_file(
+    file: UploadFile = File(...),
+    use_llm: Optional[str] = Form("false")
+):
+    """
+    Upload resume file, extract structured data, and format using ATS-friendly template.
+    
+    This is the recommended approach: instead of trying to preserve formatting from PDFs,
+    extract the data and apply a clean, ATS-friendly template.
+    
+    Parameters:
+    - file: Resume file (PDF or TXT)
+    - use_llm: Whether to use LLM for better extraction (optional, default: false)
+    
+    Returns:
+    - extracted_data: Structured JSON data
+    - formatted_resume: ATS-friendly formatted resume text
+    """
+    try:
+        # Read and extract text from file
+        file_content = await file.read()
+        resume_text = extract_text_from_file(file_content, file.filename)
+        
+        # Parse use_llm
+        use_llm_flag = False
+        if isinstance(use_llm, str):
+            use_llm_flag = use_llm.lower() in ('true', '1', 'yes')
+        elif isinstance(use_llm, bool):
+            use_llm_flag = use_llm
+        
+        # Check LLM availability
+        if not use_llm_flag:
+            use_llm_flag = os.getenv('USE_LLM', 'false').lower() == 'true'
+        
+        llm_provider = os.getenv('LLM_PROVIDER', 'perplexity').lower()
+        llm_api_key = os.getenv('PERPLEXITY_API_KEY') or os.getenv('OPENAI_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
+        
+        if use_llm_flag and not llm_api_key:
+            use_llm_flag = False  # Fallback to rule-based
+        
+        # Extract structured data
+        extractor = ResumeExtractor(
+            resume_text=resume_text,
+            use_llm=use_llm_flag,
+            llm_api_key=llm_api_key,
+            llm_provider=llm_provider
+        )
+        
+        resume_data = extractor.extract()
+        
+        # Format using ATS-friendly template
+        formatted_resume = ATSResumeTemplate.format_resume(resume_data)
+        
+        # Convert to JSON-serializable format
+        extracted_dict = {
+            "personal_info": {
+                "full_name": resume_data.personal_info.full_name,
+                "email": resume_data.personal_info.email,
+                "phone": resume_data.personal_info.phone,
+                "location": resume_data.personal_info.location,
+                "linkedin": resume_data.personal_info.linkedin,
+                "portfolio": resume_data.personal_info.portfolio
+            },
+            "summary": resume_data.summary,
+            "work_experience": [
+                {
+                    "job_title": exp.job_title,
+                    "company": exp.company,
+                    "location": exp.location,
+                    "start_date": exp.start_date,
+                    "end_date": exp.end_date,
+                    "is_current": exp.is_current,
+                    "bullets": exp.bullets
+                }
+                for exp in resume_data.work_experience
+            ],
+            "skills": resume_data.skills,
+            "education": [
+                {
+                    "degree": edu.degree,
+                    "field": edu.field,
+                    "institution": edu.institution,
+                    "location": edu.location,
+                    "graduation_date": edu.graduation_date,
+                    "gpa": edu.gpa
+                }
+                for edu in resume_data.education
+            ],
+            "certifications": resume_data.certifications,
+            "projects": resume_data.projects
+        }
+        
+        return JSONResponse({
+            "success": True,
+            "filename": file.filename,
+            "extraction_method": "llm" if (use_llm_flag and extractor._llm_client) else "rule-based",
+            "extracted_data": extracted_dict,
+            "formatted_resume": formatted_resume,
+            "message": "Resume data extracted and formatted using ATS-friendly template"
+        })
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Extraction error: {str(e)}")
 
 
 if __name__ == "__main__":
